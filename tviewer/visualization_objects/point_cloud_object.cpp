@@ -22,6 +22,9 @@
 
 #include "point_cloud_object.h"
 
+using Coloring = tviewer::PointCloudObject::Coloring;
+using Color = tviewer::Color;
+
 namespace
 {
 
@@ -57,6 +60,34 @@ namespace
 
   };
 
+  template <typename PointT>
+  struct ColoringVisitor : public boost::static_visitor<>
+  {
+
+    using ColorHandlerPtr = typename pcl::visualization::PointCloudColorHandler<PointT>::Ptr;
+    ColorHandlerPtr& handler_;
+
+    ColoringVisitor (ColorHandlerPtr& handler)
+    : handler_ (handler)
+    {
+    }
+
+    void
+    operator() (const std::string& field)
+    {
+      handler_.reset (new pcl::visualization::PointCloudColorHandlerGenericField<PointT>(field));
+    }
+
+    void
+    operator() (const Color& color)
+    {
+      float r, g, b;
+      std::tie (r, g, b) = tviewer::getRGBFromColor (color);
+      handler_.reset (new pcl::visualization::PointCloudColorHandlerCustom<PointT>(r * 255, g * 255, b * 255));
+    }
+
+  };
+
   struct AddVisitor : public boost::static_visitor<>
   {
 
@@ -64,14 +95,14 @@ namespace
     const std::string& name_;
     int point_size_;
     float visibility_;
-    boost::optional<tviewer::Color> fixed_color_;
+    Coloring coloring_;
 
-    AddVisitor (pcl::visualization::PCLVisualizer& v, const std::string& name, int point_size, float visibility, boost::optional<tviewer::Color> fixed_color)
+    AddVisitor (pcl::visualization::PCLVisualizer& v, const std::string& name, int point_size, float visibility, const Coloring& coloring)
     : v_ (v)
     , name_ (name)
     , point_size_ (point_size)
     , visibility_ (visibility)
-    , fixed_color_ (fixed_color)
+    , coloring_ (coloring)
     {
     }
 
@@ -79,15 +110,14 @@ namespace
     operator() (const T& cloud)
     {
       using PointType = typename T::element_type::PointType;
-      v_.addPointCloud<PointType> (cloud, name_);
+      using ColorHandler = pcl::visualization::PointCloudColorHandler<PointType>;
+      typename ColorHandler::Ptr handler;
+      ColoringVisitor<PointType> colorize (handler);
+      boost::apply_visitor (colorize, coloring_);
+      handler->setInputCloud (cloud);
+      v_.addPointCloud<PointType> (cloud, *handler, name_);
       v_.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, point_size_, name_);
       v_.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_OPACITY, visibility_, name_);
-      if (fixed_color_)
-      {
-        float r, g, b;
-        std::tie (r, g, b) = tviewer::getRGBFromColor (*fixed_color_);
-        v_.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_COLOR, r, g, b, name_);
-      }
     }
 
   };
@@ -124,7 +154,7 @@ tviewer::PointCloudObject::at (size_t index, float& x, float& y, float& z) const
 void
 tviewer::PointCloudObject::addDataToVisualizer (pcl::visualization::PCLVisualizer& v)
 {
-  AddVisitor add (v, name_, point_size_, visibility_, fixed_color_);
+  AddVisitor add (v, name_, point_size_, visibility_, coloring_);
   boost::apply_visitor (add, data_);
 }
 
@@ -161,8 +191,7 @@ tviewer::CreatePointCloudObject::operator std::shared_ptr<PointCloudObject> ()
                                              onUpdate_ ? *onUpdate_ : l,
                                              *pointSize_,
                                              *visibility_,
-                                             color_ ? true : false,
-                                             color_ ? *color_ : 0
+                                             *coloring_
                                             );
 }
 
